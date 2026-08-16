@@ -3,11 +3,15 @@
 # http_listen / socks5_listen / stats_listen: proxy endpoints.
 # stats_listen serves /stats (JSON) and /metrics (Prometheus), gated by
 # stats_token; set stats_listen to "" to disable the stats endpoint entirely.
+# Each listener starts by default; disable one with enable_*: false.
 
 http_listen: ":3128"           # conventional HTTP proxy port (Squid)
 socks5_listen: ":1080"
 stats_listen: "127.0.0.1:9090"   # stats are operational: loopback by default
 stats_token: "CHANGE_ME"
+# enable_http: true
+# enable_socks5: true
+# enable_stats: true
 
 # --- Pool selection ---------------------------------------------------------
 # Option A: a whole routed range (Hetzner, OVH, Vultr, ... provider routes

@@ -39,6 +39,9 @@ type Config struct {
 	SOCKS5Listen string    `yaml:"socks5_listen"`
 	StatsListen  string    `yaml:"stats_listen"`
 	StatsToken   string    `yaml:"stats_token"`
+	EnableHTTP   bool      `yaml:"enable_http"`
+	EnableSOCKS5 bool      `yaml:"enable_socks5"`
+	EnableStats  bool      `yaml:"enable_stats"`
 	PoolPrefix   string    `yaml:"pool_prefix"`
 	PoolBits     int       `yaml:"pool_bits"`
 	PoolHosts    []string  `yaml:"pool_hosts"`
@@ -66,11 +69,44 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.applyEnableDefaults(presentKeys(data))
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// presentKeys reports which top-level YAML keys occur in the file with a
+// non-null value, so booleans that default to true can distinguish an
+// explicit false from an absent key (both decode to false otherwise).
+func presentKeys(data []byte) map[string]bool {
+	var raw map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	present := make(map[string]bool, len(raw))
+	for k, n := range raw {
+		if n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Value == "") {
+			continue
+		}
+		present[k] = true
+	}
+	return present
+}
+
+// applyEnableDefaults enables every listener unless the config explicitly
+// sets enable_http/enable_socks5/enable_stats to false.
+func (c *Config) applyEnableDefaults(present map[string]bool) {
+	if !present["enable_http"] {
+		c.EnableHTTP = true
+	}
+	if !present["enable_socks5"] {
+		c.EnableSOCKS5 = true
+	}
+	if !present["enable_stats"] {
+		c.EnableStats = true
+	}
 }
 
 func (c *Config) applyDefaults() {

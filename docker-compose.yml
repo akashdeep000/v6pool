@@ -33,3 +33,9 @@ services:
       # V6POOL_CLAIM_IFACE: eth0
       # V6POOL_HTTP_PORT: "3128"
       # V6POOL_SOCKS_PORT: "1080"
+      # V6POOL_STATS_PORT: "9090"          # stats/metrics port (on 127.0.0.1;
+      #                                    # or override the full bind addr with
+      #                                    # V6POOL_STATS_LISTEN)
+      # V6POOL_DISABLE_HTTP: "true"        # don't start the HTTP proxy
+      # V6POOL_DISABLE_SOCKS5: "true"      # don't start the SOCKS5 proxy
+      # V6POOL_DISABLE_STATS: "true"       # don't start the stats server

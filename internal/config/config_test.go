@@ -41,6 +41,63 @@ accounts:
 	}
 }
 
+func TestLoadListenersEnabledByDefault(t *testing.T) {
+	path := writeConfig(t, `
+pool_prefix: "2001:db8::"
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableHTTP || !cfg.EnableSOCKS5 || !cfg.EnableStats {
+		t.Errorf("listeners should default to enabled: %+v", cfg)
+	}
+}
+
+func TestLoadListenersCanBeDisabled(t *testing.T) {
+	path := writeConfig(t, `
+pool_prefix: "2001:db8::"
+enable_http: false
+enable_stats: false
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableHTTP {
+		t.Error("enable_http: false not honored")
+	}
+	if !cfg.EnableSOCKS5 {
+		t.Error("socks5 listener should stay enabled")
+	}
+	if cfg.EnableStats {
+		t.Error("enable_stats: false not honored")
+	}
+}
+
+func TestLoadNullEnableKeyTreatedAsAbsent(t *testing.T) {
+	path := writeConfig(t, `
+pool_prefix: "2001:db8::"
+enable_socks5: null
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableSOCKS5 {
+		t.Error("null enable_socks5 should default to enabled")
+	}
+}
+
 func TestLoadKnownFieldsRejectsTypos(t *testing.T) {
 	path := writeConfig(t, `
 pool_prefix: "2001:db8::"

@@ -18,8 +18,11 @@ if [ ! -f "$CONFIG" ]; then
     {
       echo "http_listen: \":${V6POOL_HTTP_PORT:-3128}\""
       echo "socks5_listen: \":${V6POOL_SOCKS_PORT:-1080}\""
-      echo "stats_listen: \"${V6POOL_STATS_LISTEN:-127.0.0.1:9090}\""
+      echo "stats_listen: \"${V6POOL_STATS_LISTEN:-127.0.0.1:${V6POOL_STATS_PORT:-9090}}\""
       [ -n "${V6POOL_STATS_TOKEN:-}" ] && echo "stats_token: \"$V6POOL_STATS_TOKEN\""
+      [ "${V6POOL_DISABLE_HTTP:-false}" = "true" ] && echo "enable_http: false"
+      [ "${V6POOL_DISABLE_SOCKS5:-false}" = "true" ] && echo "enable_socks5: false"
+      [ "${V6POOL_DISABLE_STATS:-false}" = "true" ] && echo "enable_stats: false"
       if [ -n "${V6POOL_POOL_PREFIX:-}" ]; then
         echo "pool_prefix: \"$V6POOL_POOL_PREFIX\""
         echo "pool_bits: ${V6POOL_POOL_BITS:-64}"

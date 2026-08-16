@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route show` output, Go 1.24.0 download, `-config` flag wiring, shellcheck
   clean.
 
+### Added
+
+- Docker zero-config: `V6POOL_STATS_PORT` (metrics port on 127.0.0.1,
+  `V6POOL_STATS_LISTEN` still overrides the full bind address) plus
+  `V6POOL_DISABLE_HTTP` / `V6POOL_DISABLE_SOCKS5` / `V6POOL_DISABLE_STATS`
+  to leave individual listeners off.
+- Config: `enable_http` / `enable_socks5` / `enable_stats` booleans (all
+  default true; absent ≠ disabled, only an explicit `false` turns a
+  listener off). `stats_listen: ""` continues to disable the stats server.
+
 ### Changed
 
 - Default HTTP proxy port 8080 → **3128**.

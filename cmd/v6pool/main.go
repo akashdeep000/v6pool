@@ -61,7 +61,7 @@ func run() error {
 
 	errCh := make(chan error, 3)
 
-	if cfg.HTTPListen != "" {
+	if cfg.EnableHTTP && cfg.HTTPListen != "" {
 		ln, err := net.Listen("tcp", cfg.HTTPListen)
 		if err != nil {
 			return fmt.Errorf("http listen: %w", err)
@@ -70,9 +70,11 @@ func run() error {
 			slog.Info("http proxy listening", "addr", ln.Addr())
 			errCh <- http.Serve(ln, px.Handler())
 		}()
+	} else {
+		slog.Info("http proxy disabled")
 	}
 
-	if cfg.SOCKS5Listen != "" {
+	if cfg.EnableSOCKS5 && cfg.SOCKS5Listen != "" {
 		ln, err := net.Listen("tcp", cfg.SOCKS5Listen)
 		if err != nil {
 			return fmt.Errorf("socks5 listen: %w", err)
@@ -81,9 +83,11 @@ func run() error {
 			slog.Info("socks5 listening", "addr", ln.Addr())
 			errCh <- serveSOCKS5(ln, px)
 		}()
+	} else {
+		slog.Info("socks5 proxy disabled")
 	}
 
-	if cfg.StatsListen != "" {
+	if cfg.EnableStats && cfg.StatsListen != "" {
 		ln, err := net.Listen("tcp", cfg.StatsListen)
 		if err != nil {
 			return fmt.Errorf("stats listen: %w", err)
@@ -92,6 +96,12 @@ func run() error {
 			slog.Info("stats listening", "addr", ln.Addr())
 			errCh <- http.Serve(ln, px.StatsHandler(cfg.StatsToken))
 		}()
+	} else {
+		slog.Info("stats server disabled")
+	}
+
+	if !cfg.EnableHTTP && !cfg.EnableSOCKS5 && !cfg.EnableStats {
+		slog.Warn("all listeners disabled, proxy will not accept connections")
 	}
 
 	// Sweep expired sticky sessions and idle claimed addresses on a fixed
