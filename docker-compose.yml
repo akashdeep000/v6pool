@@ -6,9 +6,18 @@
 #   volumes:
 #     - ./config.yaml:/etc/v6pool/config.yaml:ro
 #
-# network_mode: host + cap_add: NET_ADMIN are required for claim mode (source
-# addresses added with `ip addr add`); with host networking the proxy binds
-# the host's interfaces directly and stats stay on 127.0.0.1.
+# Two ways to run:
+#
+# 1. Default service — network_mode: host + cap_add: NET_ADMIN (required for
+#    claim mode: source addresses added with `ip addr add`). Binds the host's
+#    interfaces directly, stats stay on 127.0.0.1. Ports are whatever the
+#    config says (3128/1080) — change V6POOL_HTTP_PORT/V6POOL_SOCKS_PORT or
+#    set one to "" to disable that listener if the host port is taken.
+#
+# 2. `docker compose --profile traefik up -d` — bridged, NO host ports: your
+#    Traefik proxies the HTTP listener via a TCP router. Nothing can collide.
+#    Claim mode is unavailable in this setup (no host netns); use auto_pool,
+#    pool_prefix, source_iface or fixed_source.
 services:
   v6pool:
     image: ghcr.io/akashdeep000/v6pool:latest
@@ -33,3 +42,35 @@ services:
       # V6POOL_CLAIM_IFACE: eth0
       # V6POOL_HTTP_PORT: "3128"
       # V6POOL_SOCKS_PORT: "1080"
+
+  # Traefik-routed, no host ports. Requires a `traefik` docker network and a
+  # dedicated TCP entrypoint on the Traefik side (e.g. `proxy` on :3128);
+  # raw proxy traffic carries no hostname, so HostSNI(`*`) matches it on that
+  # entrypoint only. Example Traefik static config:
+  #   entryPoints:
+  #     proxy:
+  #       address: ":3128"
+  v6pool-traefik:
+    image: ghcr.io/akashdeep000/v6pool:latest
+    container_name: v6pool-traefik
+    restart: unless-stopped
+    profiles: ["traefik"]
+    networks:
+      - traefik
+    environment:
+      V6POOL_USER: change-me
+      V6POOL_PASS: change-me
+      V6POOL_AUTO_POOL: "true"
+      V6POOL_SOCKS_PORT: ""            # only the HTTP proxy is routed
+      V6POOL_STATS_TOKEN: change-me
+      # V6POOL_POOL_PREFIX: "2001:db8:1:2::"
+      # V6POOL_SOURCE_IFACE: eth0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.routers.v6pool.entrypoints=proxy"
+      - "traefik.tcp.routers.v6pool.rule=HostSNI(`*`)"
+      - "traefik.tcp.services.v6pool.loadbalancer.server.port=3128"
+
+networks:
+  traefik:
+    external: true

@@ -13,11 +13,22 @@ set -e
 CONFIG="${V6POOL_CONFIG:-/etc/v6pool/config.yaml}"
 
 if [ ! -f "$CONFIG" ]; then
-  if [ -n "${V6POOL_POOL_PREFIX:-}" ] || [ -n "${V6POOL_POOL_HOSTS:-}" ] || \
-     [ -n "${V6POOL_AUTO_POOL:-}" ] || [ -n "${V6POOL_FIXED_SOURCE:-}" ]; then
+if [ -n "${V6POOL_POOL_PREFIX:-}" ] || [ -n "${V6POOL_POOL_HOSTS:-}" ] || \
+       [ -n "${V6POOL_AUTO_POOL:-}" ] || [ -n "${V6POOL_FIXED_SOURCE:-}" ]; then
     {
-      echo "http_listen: \":${V6POOL_HTTP_PORT:-3128}\""
-      echo "socks5_listen: \":${V6POOL_SOCKS_PORT:-1080}\""
+      # Listeners are emitted only when wanted: an explicitly empty
+      # V6POOL_HTTP_PORT/V6POOL_SOCKS_PORT writes http_listen: ""/socks5_listen:
+      # "" (listener disabled), an unset one gets the default port.
+      if [ -n "${V6POOL_HTTP_PORT+x}" ] && [ -z "$V6POOL_HTTP_PORT" ]; then
+        echo 'http_listen: ""'
+      else
+        echo "http_listen: \":${V6POOL_HTTP_PORT:-3128}\""
+      fi
+      if [ -n "${V6POOL_SOCKS_PORT+x}" ] && [ -z "$V6POOL_SOCKS_PORT" ]; then
+        echo 'socks5_listen: ""'
+      else
+        echo "socks5_listen: \":${V6POOL_SOCKS_PORT:-1080}\""
+      fi
       echo "stats_listen: \"${V6POOL_STATS_LISTEN:-127.0.0.1:9090}\""
       [ -n "${V6POOL_STATS_TOKEN:-}" ] && echo "stats_token: \"$V6POOL_STATS_TOKEN\""
       if [ -n "${V6POOL_POOL_PREFIX:-}" ]; then

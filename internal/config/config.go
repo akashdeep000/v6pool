@@ -61,24 +61,35 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Track which keys the file actually set, so an explicit empty
+	// http_listen/socks5_listen can disable a listener instead of being
+	// replaced by the default port.
+	var present map[string]any
+	if err := yaml.Unmarshal(data, &present); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	cfg.applyDefaults()
+	_, hasHTTP := present["http_listen"]
+	_, hasSOCKS := present["socks5_listen"]
+	cfg.applyDefaults(hasHTTP, hasSOCKS)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-func (c *Config) applyDefaults() {
-	if c.HTTPListen == "" {
+// applyDefaults fills in defaults for keys absent from the config. An
+// explicitly empty http_listen or socks5_listen disables that listener.
+func (c *Config) applyDefaults(hasHTTP, hasSOCKS bool) {
+	if !hasHTTP && c.HTTPListen == "" {
 		c.HTTPListen = DefaultHTTPListen
 	}
-	if c.SOCKS5Listen == "" {
+	if !hasSOCKS && c.SOCKS5Listen == "" {
 		c.SOCKS5Listen = DefaultSOCKS5Listen
 	}
 	if c.PoolBits == 0 {

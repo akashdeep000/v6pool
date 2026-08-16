@@ -128,3 +128,43 @@ accounts:
 		t.Error("Freebind not set")
 	}
 }
+
+func TestLoadDisablesListenersWithEmptyValue(t *testing.T) {
+	path := writeConfig(t, `
+http_listen: ""
+pool_prefix: "2001:db8::"
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPListen != "" {
+		t.Errorf("HTTPListen = %q, want \"\" (disabled)", cfg.HTTPListen)
+	}
+	if cfg.SOCKS5Listen != ":1080" {
+		t.Errorf("SOCKS5Listen = %q, want default :1080", cfg.SOCKS5Listen)
+	}
+}
+
+func TestLoadDisablesSOCKS5(t *testing.T) {
+	path := writeConfig(t, `
+socks5_listen: ""
+pool_prefix: "2001:db8::"
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SOCKS5Listen != "" {
+		t.Errorf("SOCKS5Listen = %q, want \"\" (disabled)", cfg.SOCKS5Listen)
+	}
+	if cfg.HTTPListen != ":3128" {
+		t.Errorf("HTTPListen = %q, want default :3128", cfg.HTTPListen)
+	}
+}

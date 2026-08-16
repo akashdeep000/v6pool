@@ -47,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (dial-learn; refreshed after 5 minutes). On Android/Termux that makes
   rotation zero-config: the first request exits from the device's own
   address, every later one rotates.
+- Listeners can be disabled: an explicitly empty `http_listen` or
+  `socks5_listen` (or `V6POOL_HTTP_PORT=""`/`V6POOL_SOCKS_PORT=""` in Docker)
+  turns that listener off instead of defaulting to a port — no bind, no
+  collisions with existing services. Config loading now distinguishes an
+  absent key from an explicitly empty one.
+- Traefik support: `V6POOL_TRAEFIK_NETWORK=<network>` in `docker-run.sh` and
+  a `traefik` profile in `docker-compose.yml` run the container bridged with
+  only Traefik TCP labels — zero host ports published, so it cannot collide
+  with anything else running. Claim mode is unavailable in this setup
+  (requires host networking).
 
 ### Fixed
 

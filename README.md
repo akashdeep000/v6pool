@@ -44,6 +44,28 @@ generated from the `V6POOL_*` environment; alternatively mount your own config
 `--network host` + `--cap-add NET_ADMIN` are already set up: the proxy binds
 source addresses on the host's network stack and can claim them.
 
+**Only expose what you use.** A listener is disabled entirely by setting its
+port to `""` — no port, no binding, no collision:
+
+```bash
+V6POOL_SOCKS_PORT="" ./docker-run.sh        # HTTP proxy only (:3128)
+V6POOL_HTTP_PORT="" V6POOL_SOCKS_PORT=8080 ./docker-run.sh   # SOCKS5 only
+```
+
+**Traefik (no published ports, nothing can collide).** Put the container on
+your Traefik docker network and route the HTTP proxy through a dedicated TCP
+entrypoint — raw proxy traffic carries no hostname, so `HostSNI(\`*\`)` on
+that entrypoint is the standard match:
+
+```bash
+V6POOL_TRAEFIK_NETWORK=traefik V6POOL_SOCKS_PORT="" ./docker-run.sh
+```
+
+or `docker compose --profile traefik up -d` (see `docker-compose.yml` for
+the labels and the Traefik `entryPoints.proxy` static-config snippet).
+Claim mode needs the host network stack, so use `auto_pool`/`pool_prefix`/
+`source_iface`/`fixed_source` there.
+
 ### systemd (installer)
 
 ```bash
