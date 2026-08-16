@@ -32,6 +32,7 @@ if [ ! -f "$CONFIG" ]; then
       fi
       [ -n "${V6POOL_SOURCE_IFACE:-}" ] && echo "source_iface: \"$V6POOL_SOURCE_IFACE\""
       [ "${V6POOL_AUTO_POOL:-false}" = "true" ] && echo "auto_pool: true"
+      [ "${V6POOL_FREEBIND:-false}" = "true" ] && echo "freebind: true"
       [ -n "${V6POOL_FIXED_SOURCE:-}" ] && echo "fixed_source: \"$V6POOL_FIXED_SOURCE\""
       [ -n "${V6POOL_CLAIM_IFACE:-}" ] && echo "claim_iface: \"$V6POOL_CLAIM_IFACE\""
       echo "accounts:"

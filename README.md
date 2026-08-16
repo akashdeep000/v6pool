@@ -118,6 +118,27 @@ accounts:
     size: 1000000
 ```
 
+## Unprivileged running (Android/Termux, no root)
+
+Normally rotation needs either the `ip_nonlocal_bind` sysctl or address
+claiming (`ip addr add`, root). There's a third way: the `IP_FREEBIND` socket
+option, which any unprivileged process can set — it allows binding to
+addresses that aren't assigned to an interface. Enable it with:
+
+```yaml
+freebind: true
+source_iface: wlan0   # or whichever interface has the (delegated) prefix
+auto_pool: true
+```
+
+Build and run in Termux (`pkg install golang`, `make build`, then run the
+binary with this config). It works whenever the **network routes the whole
+prefix to your device without needing addresses announced on the wire** —
+i.e. a carrier or router that performs DHCPv6 prefix delegation. It does
+*not* work on NDP host-check tethers (those need claiming, which requires
+root). Wired-only proxy (HTTP/SOCKS5) without rotation, e.g. a single-address
+setup, works unprivileged without `freebind`.
+
 ## Address claiming (tether / routed prefixes)
 
 By default v6pool binds source addresses that are already assigned to an

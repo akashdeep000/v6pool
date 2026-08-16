@@ -111,3 +111,20 @@ accounts:
 		t.Errorf("FixedSource = %q", cfg.FixedSource)
 	}
 }
+
+func TestLoadFreebind(t *testing.T) {
+	path := writeConfig(t, `
+pool_prefix: "2001:db8:1:2::"
+freebind: true
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Freebind {
+		t.Error("Freebind not set")
+	}
+}

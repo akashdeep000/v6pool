@@ -36,6 +36,14 @@ pool_bits: 64
 # source_iface: "enp0s20f0u2"
 # auto_pool: true
 
+# Unprivileged rotation (Android/Termux, no root): allow binding to pool
+# addresses that aren't assigned to an interface via IP_FREEBIND instead of
+# needing the ip_nonlocal_bind sysctl or claiming. Requires a network that
+# routes the whole prefix to the device (e.g. a carrier/router performing
+# DHCPv6 prefix delegation) — the NDP host-check tether case still needs
+# claiming (root).
+# freebind: true
+
 # --- Behavior ---------------------------------------------------------------
 sticky_ttl_seconds: 300   # how long a -session-<token> keeps its IP
 avoid_recent: 128         # don't reuse the last N picked addresses

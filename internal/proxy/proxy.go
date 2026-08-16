@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/akashdeep000/v6pool/internal/claim"
@@ -329,6 +330,20 @@ func (p *Proxy) logReq(acct *Account, sessionKey, method, host string, status in
 	)
 }
 
+// freebindControl is the Dialer.Control hook that opts the socket into
+// IP_FREEBIND, allowing a source address that isn't assigned to an interface
+// (Android/Termux, hosts without ip_nonlocal_bind). It applies before the
+// kernel binds, so no address is needed on the interface.
+func freebindControl(_ string, _ string, c syscall.RawConn) error {
+	var serr error
+	if err := c.Control(func(fd uintptr) {
+		serr = enableFreebind(fd)
+	}); err != nil {
+		return err
+	}
+	return serr
+}
+
 // dialTarget dials the upstream with a picked source address, preferring IPv6
 // and falling back to IPv4. Failures are classified into the dial-error
 // metrics.
@@ -342,6 +357,9 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 	d6 := net.Dialer{
 		LocalAddr: &net.TCPAddr{IP: src},
 		Timeout:   time.Duration(p.cfg.DialTimeout) * time.Second,
+	}
+	if p.cfg.Freebind {
+		d6.Control = freebindControl
 	}
 	d4 := net.Dialer{
 		Timeout: time.Duration(p.cfg.DialTimeout) * time.Second,

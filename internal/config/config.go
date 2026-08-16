@@ -45,6 +45,7 @@ type Config struct {
 	FixedSource  string    `yaml:"fixed_source"`
 	SourceIface  string    `yaml:"source_iface"`
 	AutoPool     bool      `yaml:"auto_pool"`
+	Freebind     bool      `yaml:"freebind"`
 	ClaimIface   string    `yaml:"claim_iface"`
 	ClaimTTL     int       `yaml:"claim_ttl_seconds"`
 	LogRequests  bool      `yaml:"log_requests"`

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `freebind: true` config option: rotates from addresses not assigned to an
+  interface via the unprivileged `IP_FREEBIND` socket option — enables
+  rotation in Termux/Android without root on networks that route a delegated
+  prefix (DHCPv6 PD) to the device. Also wired to `V6POOL_FREEBIND` in the
+  docker entrypoint.
+
 - Zero-config Docker: `docker/entrypoint.sh` generates a config from `V6POOL_*`
   environment variables when none is mounted; `docker-run.sh` run/stop/restart/
   logs helper; `docker-compose.yml` for compose users.
