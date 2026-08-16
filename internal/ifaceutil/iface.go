@@ -2,14 +2,30 @@
 package ifaceutil
 
 import (
+	"encoding/hex"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // GlobalIP returns the global unicast IPv6 address of the named interface
 // with the longest prefix length, or nil when the interface has none.
+// Android app sandboxes deny netlink sockets (Termux: "Cannot bind netlink
+// socket"), so when the netlink path fails it falls back to parsing
+// /proc/net/if_inet6, which needs no privileges.
 func GlobalIP(name string) net.IP {
+	if ip := globalIPNetlink(name); ip != nil {
+		return ip
+	}
+	data, err := os.ReadFile("/proc/net/if_inet6")
+	if err != nil {
+		return nil
+	}
+	return GlobalIPFromProc(string(data), name)
+}
+
+func globalIPNetlink(name string) net.IP {
 	iface, err := net.InterfaceByName(name)
 	if err != nil {
 		return nil
@@ -30,6 +46,40 @@ func GlobalIP(name string) net.IP {
 		}
 		ones, _ := ipnet.Mask.Size()
 		if ones > bestLen {
+			bestLen = ones
+			best = ip.To16()
+		}
+	}
+	return best
+}
+
+// GlobalIPFromProc extracts the best global unicast IPv6 address of the
+// named interface from a /proc/net/if_inet6 dump. Each row is:
+//
+//	address(32 hex) ifindex prefixlen(hex) scope flags ifname
+//
+//	e.g. 24014900b78aab11f8f12fffe17c523 02 40 00 80 wlan0
+func GlobalIPFromProc(data, name string) net.IP {
+	var best net.IP
+	bestLen := -1
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 || fields[5] != name {
+			continue
+		}
+		raw, err := hex.DecodeString(fields[0])
+		if err != nil || len(raw) != 16 {
+			continue
+		}
+		ip := net.IP(raw)
+		if ip.To4() != nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
+			continue
+		}
+		ones64, err := strconv.ParseInt(fields[2], 16, 8)
+		if err != nil {
+			continue
+		}
+		if ones := int(ones64); ones > bestLen {
 			bestLen = ones
 			best = ip.To16()
 		}
