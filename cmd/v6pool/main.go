@@ -55,6 +55,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	slog.Info("pool mode",
+		"mode", px.PoolMode(),
+		"iface", cfg.SourceIface,
+		"freebind", cfg.Freebind,
+		"auto_pool", cfg.AutoPool,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
