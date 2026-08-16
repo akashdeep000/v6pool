@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   claiming works in containers.
 - `v6pool.service` passes `-config /etc/v6pool/config.yaml`.
 
+- `ifaceutil.GlobalIP` falls back to parsing `/proc/net/if_inet6` when the
+  netlink-based interface lookup is denied (Android app sandboxes).
+- `auto_pool` no longer fails outright when the live interface cannot be
+  read: it falls back to an explicit `pool_prefix` in the config, then to a
+  prefix learned from the first connection's kernel-assigned local address
+  (dial-learn; refreshed after 5 minutes). On Android/Termux that makes
+  rotation zero-config: the first request exits from the device's own
+  address, every later one rotates.
+
 ### Fixed
 
 - Deadlock in sticky-session IP selection (mutex re-lock while held).

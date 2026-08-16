@@ -43,6 +43,13 @@ pool_bits: 64
 # DHCPv6 prefix delegation) — the NDP host-check tether case still needs
 # claiming (root).
 # freebind: true
+#
+# On hosts that deny netlink and /proc/net (Android app sandboxes) auto_pool
+# falls back to an explicit pool_prefix, and then to a prefix learned from
+# the first connection's own assigned address (the first request then exits
+# from that single address, every later one rotates):
+# pool_prefix: ""    # e.g. "2401:4900:b78a:ab11::"
+# pool_bits: 64
 
 # --- Behavior ---------------------------------------------------------------
 sticky_ttl_seconds: 300   # how long a -session-<token> keeps its IP

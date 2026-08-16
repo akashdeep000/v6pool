@@ -155,3 +155,93 @@ func binaryLow64(ip net.IP) uint64 {
 	return uint64(b[8])<<56 | uint64(b[9])<<48 | uint64(b[10])<<40 | uint64(b[11])<<32 |
 		uint64(b[12])<<24 | uint64(b[13])<<16 | uint64(b[14])<<8 | uint64(b[15])
 }
+
+func TestRandomIPFallsBackToConfiguredPool(t *testing.T) {
+	cfg := testConfig()
+	cfg.AutoPool = true
+	cfg.SourceIface = "no-such-iface0"
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := p.randomIP(p.accounts["u"])
+	mask := net.CIDRMask(cfg.PoolBits, 128)
+	if !ip.Mask(mask).Equal(net.ParseIP("2001:db8::").Mask(mask)) {
+		t.Errorf("randomIP = %v, want address in configured 2001:db8::/64", ip)
+	}
+}
+
+func TestRandomIPUsesLearnedPrefix(t *testing.T) {
+	cfg := testConfig()
+	cfg.AutoPool = true
+	cfg.SourceIface = "no-such-iface0"
+	cfg.PoolPrefix = ""
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.learned = net.ParseIP("2606:4700:4700::")
+	p.learnedAt = time.Now()
+	p.mu.Unlock()
+	ip := p.randomIP(p.accounts["u"])
+	mask := net.CIDRMask(cfg.PoolBits, 128)
+	if !ip.Mask(mask).Equal(net.ParseIP("2606:4700:4700::").Mask(mask)) {
+		t.Errorf("randomIP = %v, want address in learned 2606:4700:4700::/64", ip)
+	}
+}
+
+func TestLearnedPoolExpires(t *testing.T) {
+	cfg := testConfig()
+	cfg.AutoPool = true
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.learned = net.ParseIP("2606:4700:4700::")
+	p.learnedAt = time.Now().Add(-2 * learnedTTL)
+	p.mu.Unlock()
+	if pl := p.learnedPool(); pl != nil {
+		t.Fatal("stale learned prefix still served")
+	}
+}
+
+type fakeLocalConn struct {
+	net.Conn
+	local net.Addr
+}
+
+func (f fakeLocalConn) LocalAddr() net.Addr { return f.local }
+
+func TestMaybeLearn(t *testing.T) {
+	cfg := testConfig()
+	cfg.AutoPool = true
+	cfg.PoolPrefix = ""
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := fakeLocalConn{local: &net.TCPAddr{
+		IP:   net.ParseIP("2401:4900:b78a:ab11:f8f1:2ff:fe17:c523"),
+		Port: 40000,
+	}}
+	p.maybeLearn(nil, conn)
+	p.mu.Lock()
+	got := p.learned
+	p.mu.Unlock()
+	if !got.Equal(net.ParseIP("2401:4900:b78a:ab11::")) {
+		t.Errorf("learned = %v, want 2401:4900:b78a:ab11::", got)
+	}
+
+	linkLocal := fakeLocalConn{local: &net.TCPAddr{
+		IP: net.ParseIP("fe80::1"), Port: 40000,
+	}}
+	p.maybeLearn(nil, linkLocal)
+	p.mu.Lock()
+	got2 := p.learned
+	p.mu.Unlock()
+	if !got2.Equal(net.ParseIP("2401:4900:b78a:ab11::")) {
+		t.Errorf("link-local local addr overwrote learned prefix")
+	}
+}

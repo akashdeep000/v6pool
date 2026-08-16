@@ -55,6 +55,13 @@ type Proxy struct {
 	avoid     map[string]time.Time
 	avoidRing []string
 	avoidIdx  int
+
+	// learned is a pool prefix derived from an established connection's
+	// kernel-assigned local address. It exists for hosts that deny netlink
+	// and /proc/net (Android/Termux), where livePrefix cannot discover the
+	// prefix any other way. accessed under p.mu.
+	learned   net.IP
+	learnedAt time.Time
 }
 
 // New builds a Proxy from a validated config.
@@ -190,7 +197,10 @@ func (p *Proxy) livePrefix() net.IP {
 }
 
 // randomIP picks the next rotating address: from the pool_hosts list when
-// configured, otherwise from the (possibly auto-derived) prefix pool.
+// configured, otherwise from the (possibly auto-derived) prefix pool. In
+// auto_pool mode the live interface wins; when it cannot be read (hosts
+// that deny netlink and /proc/net), an explicit pool_prefix in the config
+// is used, then the dial-learned prefix.
 func (p *Proxy) randomIP(acct *Account) net.IP {
 	p.mu.Lock()
 	acct.counter++
@@ -201,11 +211,14 @@ func (p *Proxy) randomIP(acct *Account) net.IP {
 	}
 	pl := p.pool
 	if p.cfg.AutoPool {
-		pre := p.livePrefix()
-		if pre == nil {
-			return nil
+		if pre := p.livePrefix(); pre != nil {
+			pl = pool.New(p.cfg.PoolBits, pre)
+		} else if pl == nil {
+			pl = p.learnedPool()
 		}
-		pl = pool.New(p.cfg.PoolBits, pre)
+	}
+	if pl == nil {
+		return nil
 	}
 	var ip net.IP
 	for try := 0; try < 8; try++ {
@@ -216,6 +229,22 @@ func (p *Proxy) randomIP(acct *Account) net.IP {
 		seq += 0x9E3779B97F4A7C15
 	}
 	return ip
+}
+
+// learnedTTL bounds how long a dial-learned prefix is trusted before it is
+// re-derived, so a network switch (Wi-Fi → cellular) self-heals.
+const learnedTTL = 5 * time.Minute
+
+// learnedPool returns the dial-learned prefix as a pool, or nil when none
+// is fresh. Callers must not hold p.mu.
+func (p *Proxy) learnedPool() *pool.Pool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.learned == nil || time.Since(p.learnedAt) >= learnedTTL {
+		p.learned = nil
+		return nil
+	}
+	return pool.New(p.cfg.PoolBits, p.learned)
 }
 
 // recentlyUsed reports whether ip was picked within the avoid window.
@@ -344,6 +373,43 @@ func freebindControl(_ string, _ string, c syscall.RawConn) error {
 	return serr
 }
 
+// maybeLearn records the pool prefix derived from the connection's
+// kernel-assigned local address. It only triggers when no source was picked
+// (auto_pool with both livePrefix and the configured pool unavailable),
+// which is exactly the Android/Termux case: an ordinary connect() succeeds
+// there even though netlink and /proc/net are denied, and the kernel assigns
+// the interface's own address. The first request on such hosts exits from
+// that address; every later request rotates.
+func (p *Proxy) maybeLearn(src net.IP, conn net.Conn) {
+	if src != nil || !p.cfg.AutoPool {
+		return
+	}
+	ta, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		return
+	}
+	pre := prefixFromLocal(ta, p.cfg.PoolBits)
+	if pre == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.learned = pre
+	p.learnedAt = time.Now()
+	slog.Info("learned pool prefix from connection local address",
+		"prefix", pre.String(), "bits", p.cfg.PoolBits)
+}
+
+// prefixFromLocal masks a connected socket's local address to the pool
+// prefix, or nil when it is IPv4, link-local or loopback.
+func prefixFromLocal(ta *net.TCPAddr, bits int) net.IP {
+	ip := ta.IP.To16()
+	if ip == nil || ip.To4() != nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
+		return nil
+	}
+	return ifaceutil.PrefixFromAddr(ip, bits)
+}
+
 // dialTarget dials the upstream with a picked source address, preferring IPv6
 // and falling back to IPv4. Failures are classified into the dial-error
 // metrics.
@@ -372,6 +438,7 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 				p.stats.AddDialErr(err)
 				return nil, err
 			}
+			p.maybeLearn(src, conn)
 			return conn, nil
 		}
 		conn, err := d4.DialContext(ctx, "tcp4", addr)
@@ -390,6 +457,7 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 		if ip.To4() == nil && ip.To16() != nil {
 			conn, err := d6.DialContext(ctx, "tcp6", net.JoinHostPort(ip.String(), port))
 			if err == nil {
+				p.maybeLearn(src, conn)
 				return conn, nil
 			}
 			p.stats.AddDialErr(err)

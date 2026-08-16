@@ -139,6 +139,13 @@ i.e. a carrier or router that performs DHCPv6 prefix delegation. It does
 root). Wired-only proxy (HTTP/SOCKS5) without rotation, e.g. a single-address
 setup, works unprivileged without `freebind`.
 
+Note: Android app sandboxes deny netlink and `/proc/net`, which is how
+`auto_pool` normally discovers the live prefix. On such hosts it falls back
+to an explicit `pool_prefix` in the config if set, and otherwise learns the
+prefix from the first connection's own assigned address — the first request
+exits from that single address and every later one rotates. An explicit
+`pool_prefix` avoids even that cold start.
+
 ## Address claiming (tether / routed prefixes)
 
 By default v6pool binds source addresses that are already assigned to an
