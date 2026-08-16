@@ -410,6 +410,15 @@ func prefixFromLocal(ta *net.TCPAddr, bits int) net.IP {
 	return ifaceutil.PrefixFromAddr(ip, bits)
 }
 
+// logDialFailure surfaces why a sourced IPv6 dial failed, so a silent
+// fallback to IPv4 (no rotation) can be diagnosed from the logs.
+func (p *Proxy) logDialFailure(src net.IP, err error) {
+	if src == nil || src.To4() != nil {
+		return
+	}
+	slog.Warn("ipv6 dial with source failed", "src", src.String(), "err", err)
+}
+
 // dialTarget dials the upstream with a picked source address, preferring IPv6
 // and falling back to IPv4. Failures are classified into the dial-error
 // metrics.
@@ -435,6 +444,7 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 		if ip.To4() == nil && ip.To16() != nil {
 			conn, err := d6.DialContext(ctx, "tcp6", addr)
 			if err != nil {
+				p.logDialFailure(src, err)
 				p.stats.AddDialErr(err)
 				return nil, err
 			}
@@ -460,6 +470,7 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 				p.maybeLearn(src, conn)
 				return conn, nil
 			}
+			p.logDialFailure(src, err)
 			p.stats.AddDialErr(err)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
