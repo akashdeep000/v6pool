@@ -1,0 +1,13 @@
+# binaries
+/v6pool
+
+# config (real credentials)
+/config.yaml
+
+# editor/OS junk
+*.swp
+.DS_Store
+
+# logs
+*.log
+/dist/

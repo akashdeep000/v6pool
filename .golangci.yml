@@ -1,0 +1,20 @@
+# golangci-lint configuration (v2 format).
+# Run locally with:  golangci-lint run
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

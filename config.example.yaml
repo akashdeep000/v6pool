@@ -1,0 +1,71 @@
+# v6pool configuration
+#
+# http_listen / socks5_listen / stats_listen: proxy endpoints.
+# stats_listen serves /stats (JSON) and /metrics (Prometheus), gated by
+# stats_token; set stats_listen to "" to disable the stats endpoint entirely.
+
+http_listen: ":3128"           # conventional HTTP proxy port (Squid)
+socks5_listen: ":1080"
+stats_listen: "127.0.0.1:9090"   # stats are operational: loopback by default
+stats_token: "CHANGE_ME"
+
+# --- Pool selection ---------------------------------------------------------
+# Option A: a whole routed range (Hetzner, OVH, Vultr, ... provider routes
+# the /64 (or /48) to the host). pool_prefix + pool_bits.
+pool_prefix: "2001:db8:1:2::"
+pool_bits: 64
+
+# Option B: an explicit list of addresses the provider routes to this host.
+# Works with any provider that only routes the addresses configured on the
+# machine (static /128s from Hetzner/OVH/..., allocated IPv6 objects on
+# Oracle, DHCPv6 leases, ...). The proxy rotates over the list.
+# pool_hosts:
+#   - "2001:db8:1:2:0:aaaa:bbbb:cccc:1"
+#   - "2001:db8:1:2:0:aaaa:bbbb:cccc:2"
+
+# Option C: a single address. Either pin it, or let the proxy auto-detect the
+# interface's current global address (DHCPv6 leases change over time).
+# fixed_source: "2001:db8:1:2:0:aaaa:bbbb:cccc:1"
+# source_iface: "enp0s6"
+
+# Option D: rotating pool that tracks a *dynamic* /64 (DHCPv6/SLAAC roam,
+# phone USB/Wi-Fi tether reconnects). With auto_pool: true, source_iface's
+# current global address is re-read on every pick and masked to pool_bits, so
+# rotation keeps working when the prefix changes — no restart, no cron, no
+# extra services. Claiming (if needed) auto-detects the interface.
+# source_iface: "enp0s20f0u2"
+# auto_pool: true
+
+# --- Behavior ---------------------------------------------------------------
+sticky_ttl_seconds: 300   # how long a -session-<token> keeps its IP
+avoid_recent: 128         # don't reuse the last N picked addresses
+dial_timeout_seconds: 15
+log_requests: true        # per-request log lines to journald/stdout
+
+# --- Address claiming (tether / routed-not-bound prefixes) -----------------
+# Most setups (addresses already assigned to the interface, e.g. Hetzner/OVH
+# /128s or SLAAC) need nothing: v6pool auto-detects the interface and skips
+# claiming when the picked address is already bound.
+#
+# When the prefix is routed to the host but addresses are NOT pre-assigned
+# (e.g. behind a phone's USB/Wi-Fi tether where the device does an NDP
+# host-check, or a pure-routed provider), v6pool claims each picked source
+# with `ip addr add <ip>/128 dev <iface> nodad` before dialing. Requires
+# CAP_NET_ADMIN (or root); the unit already grants it.
+#
+# claim_iface: ""            # optional; defaults to auto-detect from the pool
+# claim_ttl_seconds: 300     # how long an idle claimed address is kept
+
+# --- Accounts ---------------------------------------------------------------
+# username: password used by clients. Sticky sessions: append -session-<token>
+# to the username to pin one IP for that session.
+# Optional per-account slice of the prefix pool: start + size.
+accounts:
+  - name: primary
+    username: CHANGE_ME
+    password: CHANGE_ME
+  # - name: scrapers
+  #   username: CHANGE_ME
+  #   password: CHANGE_ME
+  #   start: 0
+  #   size: 1000000

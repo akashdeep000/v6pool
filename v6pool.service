@@ -1,0 +1,20 @@
+[Unit]
+Description=IPv6 rotating proxy (HTTP + SOCKS5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/v6pool -config /etc/v6pool/config.yaml
+Restart=on-failure
+RestartSec=3
+DynamicUser=yes
+# Required so the proxy can bind source IPv6 addresses (claim mode): it runs
+# `ip addr add <ip>/128 dev <iface> nodad`. CAP_NET_ADMIN is ambient so the
+# spawned `ip` inherits it. NoNewPrivileges must be off for ambient caps.
+NoNewPrivileges=false
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
