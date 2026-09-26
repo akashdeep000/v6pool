@@ -6,12 +6,27 @@ metrics, address claiming for tether/routed prefixes.
 
 ## Features
 
-- **Rotating** — each new connection picks a fresh source address; the last
-  `avoid_recent` addresses are skipped (default 128), so reuse is spread out
+- **Rotating** — every request walks a permuted breadth-first cycle over the
+  pool: after 2 picks both `/49` halves are used, after 4 all `/50` quarters,
+  and so on bit by bit through every prefix level — a fresh `/56`, then a
+  fresh `/64` inside reused `/56s`, then fresh IPs inside reused `/64s`.
+  Exact by construction (no tracking, no search, no fallback): distinct IPs
+  always mean distinct `/64s` on pools shorter than `/64` (Bright-Data
+  style). Any prefix length works (`pool_bits: 1`-`128`); O(1) state per
+  destination (a counter, a stride, a mask).
+- **Per-destination cycles** — each upstream host gets an independent cycle
+  (keyed tweak + own counter), so hammering one site never reuses an
+  aggregate recently shown to *that* site; a small global recent-IP ring
+  guards against cross-stream coincidences.
+- **Unlinkable exits** — full-entropy placement (reserved IDs and EUI-64
+  `ff:fe` markers skipped via cycle advance), per-boot random stream seed
+  (`pool_seed`) so restarts never replay sequences, and per-account stream
+  domains so accounts never walk the same addresses.
 - **Sticky sessions** — username `user-session-<token>` pins one IP for that
   token until `sticky_ttl_seconds` (default 300s) passes
 - **HTTP + SOCKS5 + stats** on three ports, basic auth, IPv6-only
-- **Per-account sub-pools** — slice the /64 into ranges per account
+- **Per-account sub-pools** — slice the pool into ranges per account (IID
+  range for `/64` pools, `/64` range for shorter pools like `/48`)
 - **Auto-pool for dynamic /64s** — `auto_pool` re-derives the pool from the
   interface's live address on every pick, so rotation survives DHCPv6/SLAAC
   prefix changes with no restart, cron or helper services
@@ -22,7 +37,8 @@ metrics, address claiming for tether/routed prefixes.
 - **Request logging** — one line per request (user, session, method, host,
   status, source IP, latency) when `log_requests: true`
 - **Metrics** — JSON `/stats` and Prometheus `/metrics` (dial-error breakdown,
-  per-account counters) on the stats port, token-gated
+  per-account counters, rotation picks, cycle skips, destinations tracked,
+  stream seed) on the stats port, token-gated
 
 ## Quick start
 
@@ -51,12 +67,13 @@ git clone https://github.com/akashdeep000/v6pool.git && cd v6pool
 sudo ./install.sh
 ```
 
-The installer detects the primary interface + /64 prefix, tests whether the
+The installer detects the primary interface + prefix, tests whether the
 **whole prefix is routable** and picks the mode automatically:
 
 | Mode | Providers | Rotation |
 |---|---|---|
 | Full pool (`pool_prefix` + `pool_bits`) | Hetzner, OVH, Vultr, Scaleway… | entire /64 |
+| Full prefix pool (`pool_prefix` + `pool_bits: 48`) | tunnel brokers with a routed prefix, any routed /48+ | entire prefix, fresh aggregates per pick |
 | Address list (`pool_hosts`) | any provider that routes only configured addresses | list of /128s on the host |
 | Single address (`source_iface` / `fixed_source`) | any | one address (fallback) |
 | Live pool (`source_iface` + `auto_pool`) | dynamic /64s: phone USB/Wi-Fi tether, DHCPv6/SLAAC roam | live /64, tracks prefix changes automatically |
@@ -95,13 +112,21 @@ See `config.example.yaml` for the full annotated example. Key settings:
 
 ```yaml
 pool_prefix: "2001:db8:1:2::"   # Option A: routed range
-pool_bits: 64
+pool_bits: 64                   # any 1-128 (0 = default 64); below /64 the
+                                # breadth-first cycle lands every pick in a
+                                # fresh /64 until all are used, then fresh
+                                # IPs inside reused /64s, and so on per bit
+# pool_seed: ""                 # empty = random stream per boot (restarts
+                                # never replay); 1-16 hex chars = fixed,
+                                # reproducible stream (tests)
 # pool_hosts:                            # Option B: explicit addresses
 #   - "2001:db8:1:2:0:aaaa:bbbb:cccc:1"
 # source_iface: "enp0s6"                 # Option C: single address (auto)
 # auto_pool: true                        # Option D: track a dynamic /64 live
 sticky_ttl_seconds: 300
-avoid_recent: 128
+avoid_recent: 128             # global recent-IP ring depth: guards against
+                              # cross-stream coincidences (0 = off)
+# avoid_hosts_max: 1024       # max per-destination cycles tracked (LRU)
 log_requests: true
 # stats_token: "CHANGE_ME"               # gates /stats and /metrics
 # claim_iface: ""            # optional; auto-detected from the pool prefix
@@ -114,9 +139,17 @@ accounts:
   - name: scrapers                      # optional slice of the pool
     username: user2
     password: pass2
-    start: 0                            # address index 0..size-1
+    start: 0                            # address index 0..size-1 (/64 pools);
+                                        # /64 index 0..size-1 for pools < /64
     size: 1000000
 ```
+
+With a `/48` pool the proxy needs the usual tunnel plumbing: the `/48`
+routed at the broker to your host, a `local <prefix>/48` route plus
+`net.ipv6.ip_nonlocal_bind=1` so any pool address can be bound, and a
+default route (or policy rule) sending pool-sourced traffic back through
+the tunnel. The installer sets the local route + sysctl for you; the
+tunnel device itself (SIT/WireGuard/…) is outside v6pool's scope.
 
 ## Address claiming (tether / routed prefixes)
 

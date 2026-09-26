@@ -166,6 +166,19 @@ nonlocal="$($SUDO cat /proc/sys/net/ipv6/ip_nonlocal_bind 2>/dev/null || echo 0)
 [[ "$nonlocal" != "1" ]] && $SUDO sysctl -w net.ipv6.ip_nonlocal_bind=1 >/dev/null
 
 test_addr="${prefix%::}::3"
+if command -v python3 >/dev/null 2>&1; then
+  # Robust probe address for any prefix shape (prefixes not ending in ::
+  # would otherwise produce a garbage test address): network address + 3.
+  probed=$(python3 -c "
+import ipaddress, sys
+try:
+    net = ipaddress.IPv6Network('$prefix/$plen', strict=False)
+    print(str(net.network_address + 3))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null || true)
+  [[ -n "$probed" ]] && test_addr="$probed"
+fi
 pool_mode=0
 if command -v curl >/dev/null 2>&1; then
   $SUDO ip -6 route add local "${prefix}/${plen}" dev "$iface" 2>/dev/null || true

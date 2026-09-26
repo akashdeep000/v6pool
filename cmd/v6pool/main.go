@@ -105,7 +105,8 @@ func run() error {
 	}
 
 	// Sweep expired sticky sessions and idle claimed addresses on a fixed
-	// schedule while the proxy runs.
+	// schedule while the proxy runs. SweepStreams purges idle rotation
+	// cycles; freshness comes from the cycles themselves.
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -116,6 +117,7 @@ func run() error {
 			case <-t.C:
 				px.SweepSessions()
 				px.SweepClaims()
+				px.SweepStreams()
 			}
 		}
 	}()

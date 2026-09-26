@@ -4,7 +4,7 @@
 #   http:  ./check-rotation.sh 'http://user:pass@HOST:3128'
 #   socks: ./check-rotation.sh 'socks5h://user:pass@HOST:1080'
 
-PROXY="${1:?usage: $0 'http://USER:PASS@HOST:8080' [requests] [url]}"
+PROXY="${1:?usage: $0 'http://USER:PASS@HOST:3128' [requests] [url]}"
 REQUESTS="${2:-10}"
 URL="${3:-https://api6.ipify.org}"
 

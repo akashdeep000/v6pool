@@ -27,6 +27,7 @@ if [ ! -f "$CONFIG" ]; then
         echo "pool_prefix: \"$V6POOL_POOL_PREFIX\""
         echo "pool_bits: ${V6POOL_POOL_BITS:-64}"
       fi
+      [ -n "${V6POOL_POOL_SEED:-}" ] && echo "pool_seed: \"$V6POOL_POOL_SEED\""
       if [ -n "${V6POOL_POOL_HOSTS:-}" ]; then
         echo "pool_hosts:"
         for h in $V6POOL_POOL_HOSTS; do
@@ -37,6 +38,9 @@ if [ ! -f "$CONFIG" ]; then
       [ "${V6POOL_AUTO_POOL:-false}" = "true" ] && echo "auto_pool: true"
       [ -n "${V6POOL_FIXED_SOURCE:-}" ] && echo "fixed_source: \"$V6POOL_FIXED_SOURCE\""
       [ -n "${V6POOL_CLAIM_IFACE:-}" ] && echo "claim_iface: \"$V6POOL_CLAIM_IFACE\""
+      [ -n "${V6POOL_STICKY_TTL:-}" ] && echo "sticky_ttl_seconds: $V6POOL_STICKY_TTL"
+      [ -n "${V6POOL_AVOID_RECENT:-}" ] && echo "avoid_recent: $V6POOL_AVOID_RECENT"
+      [ -n "${V6POOL_AVOID_HOSTS_MAX:-}" ] && echo "avoid_hosts_max: $V6POOL_AVOID_HOSTS_MAX"
       echo "accounts:"
       echo "  - name: primary"
       echo "    username: \"${V6POOL_USER:?V6POOL_USER is required when generating a config}\""

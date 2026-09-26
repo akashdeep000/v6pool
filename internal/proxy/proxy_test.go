@@ -8,6 +8,17 @@ import (
 	"github.com/akashdeep000/v6pool/internal/config"
 )
 
+// prefixBits returns the top k bits of ip as a string key (test helper).
+func prefixBits(ip net.IP, k int) string {
+	b := ip.To16()
+	out := make([]byte, 0, k/8+1)
+	out = append(out, b[:k/8]...)
+	if k%8 != 0 {
+		out = append(out, b[k/8]&(^uint8(0)<<uint(8-k%8)))
+	}
+	return string(out)
+}
+
 func testConfig() *config.Config {
 	return &config.Config{
 		PoolPrefix:  "2001:db8::",
@@ -67,7 +78,7 @@ func TestRotationDistinct(t *testing.T) {
 	acct := p.accounts["u"]
 	seen := make(map[string]bool)
 	for i := 0; i < 10; i++ {
-		ip := p.pickSource(acct, "")
+		ip := p.pickSource(acct, "", "")
 		if ip == nil {
 			t.Fatal("nil source picked")
 		}
@@ -81,13 +92,13 @@ func TestRotationDistinct(t *testing.T) {
 func TestStickySessionPinsAddress(t *testing.T) {
 	p := newTestProxy(t)
 	acct := p.accounts["u"]
-	first := p.pickSource(acct, "tok1")
+	first := p.pickSource(acct, "tok1", "")
 	for i := 0; i < 20; i++ {
-		if got := p.pickSource(acct, "tok1"); !got.Equal(first) {
+		if got := p.pickSource(acct, "tok1", ""); !got.Equal(first) {
 			t.Fatalf("sticky session drifted: %s then %s", first, got)
 		}
 	}
-	other := p.pickSource(acct, "tok2")
+	other := p.pickSource(acct, "tok2", "")
 	if other.Equal(first) {
 		t.Fatalf("distinct tokens pinned to same address %s", other)
 	}
@@ -97,9 +108,9 @@ func TestStickySessionExpiry(t *testing.T) {
 	p := newTestProxy(t)
 	p.cfg.StickyTTL = 0
 	acct := p.accounts["u"]
-	first := p.pickSource(acct, "tok1")
+	first := p.pickSource(acct, "tok1", "")
 	p.sessions["tok1"].expire = time.Now().Add(-time.Second)
-	if got := p.pickSource(acct, "tok1"); got.Equal(first) {
+	if got := p.pickSource(acct, "tok1", ""); got.Equal(first) {
 		t.Fatal("expired session not replaced")
 	}
 	p.SweepSessions()
@@ -114,11 +125,70 @@ func TestAvoidRecent(t *testing.T) {
 	p.cfg.AvoidRecent = 2
 	var last net.IP
 	for i := 0; i < 5; i++ {
-		ip := p.pickSource(acct, "")
+		ip := p.pickSource(acct, "", "")
 		if i > 0 && ip.Equal(last) {
 			t.Fatalf("repeated address %s in avoid window", ip)
 		}
 		last = ip
+	}
+}
+
+func test48Config() *config.Config {
+	return &config.Config{
+		PoolPrefix:  "2a01:d0:b081::",
+		PoolBits:    48,
+		StickyTTL:   600,
+		AvoidRecent: 1024,
+		DialTimeout: 15,
+		ClaimTTL:    300,
+		Accounts: []config.Account{
+			{Username: "u", Password: "p"},
+		},
+	}
+}
+
+func Test48DistinctSubnetPerPick(t *testing.T) {
+	cfg := test48Config()
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	seenIP := make(map[string]bool)
+	seenSubnet := make(map[string]bool)
+	for i := 0; i < 50; i++ {
+		ip := p.pickSource(acct, "", "")
+		if ip == nil {
+			t.Fatal("nil source picked")
+		}
+		if seenIP[ip.String()] {
+			t.Fatalf("repeated IP %s within avoid window", ip)
+		}
+		seenIP[ip.String()] = true
+		sub := prefixBits(ip, 64)
+		if seenSubnet[sub] {
+			t.Fatalf("reused /64 for %s within avoid window (want distinct /64 per IP)", ip)
+		}
+		seenSubnet[sub] = true
+	}
+}
+
+func Test48StickyPinsSubnet(t *testing.T) {
+	cfg := test48Config()
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	first := p.pickSource(acct, "tok1", "")
+	for i := 0; i < 5; i++ {
+		if got := p.pickSource(acct, "tok1", ""); !got.Equal(first) {
+			t.Fatalf("sticky session drifted: %s then %s", first, got)
+		}
+	}
+	other := p.pickSource(acct, "tok2", "")
+	if prefixBits(other, 64) == prefixBits(first, 64) {
+		t.Fatalf("distinct tokens share /64 %s and %s (want distinct /64 per session)", first, other)
 	}
 }
 
@@ -130,7 +200,7 @@ func TestAccountRangeRestriction(t *testing.T) {
 		t.Fatal(err)
 	}
 	acct := p.accounts["u"]
-	lo := binaryLow64(p.pickSource(acct, ""))
+	lo := binaryLow64(p.pickSource(acct, "", ""))
 	if lo < 100 || lo >= 104 {
 		t.Fatalf("address outside account range: %x", lo)
 	}
@@ -154,4 +224,162 @@ func binaryLow64(ip net.IP) uint64 {
 	b := ip.To16()
 	return uint64(b[8])<<56 | uint64(b[9])<<48 | uint64(b[10])<<40 | uint64(b[11])<<32 |
 		uint64(b[12])<<24 | uint64(b[13])<<16 | uint64(b[14])<<8 | uint64(b[15])
+}
+
+func TestExactCascade60(t *testing.T) {
+	cfg := test48Config()
+	cfg.PoolPrefix = "2a01:d0:b081::"
+	cfg.PoolBits = 60
+	cfg.PoolSeed = "1234"
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	var first net.IP
+	seen := make(map[string]bool)
+	for i := 0; i < 17; i++ {
+		ip := p.pickSource(acct, "", "t.example")
+		if i == 0 {
+			first = ip
+		}
+		if i < 16 {
+			k := prefixBits(ip, 64)
+			if seen[k] {
+				t.Fatalf("pick %d reused /64 %s before exhaustion", i+1, ip)
+			}
+			seen[k] = true
+			continue
+		}
+		// 17th pick re-enters the 1st /64 in the opposite /65 half.
+		if prefixBits(ip, 64) != prefixBits(first, 64) {
+			t.Fatalf("pick 17 = %s left /64 %s", ip, first)
+		}
+		if prefixBits(ip, 65) == prefixBits(first, 65) {
+			t.Fatalf("pick 17 = %s did not advance /65 within %s", ip, first)
+		}
+	}
+}
+
+func TestHierarchical56Spread(t *testing.T) {
+	cfg := test48Config()
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	seen56 := make(map[string]bool)
+	for i := 0; i < 60; i++ {
+		ip := p.pickSource(acct, "", "example.com")
+		if ip == nil {
+			t.Fatal("nil source picked")
+		}
+		seen56[prefixBits(ip, 56)] = true
+	}
+	// 256 /56s exist; the search must spread across them, not camp in one.
+	if len(seen56) < 50 {
+		t.Errorf("expected wide /56 spread, got %d distinct /56s over 60 picks", len(seen56))
+	}
+}
+
+func TestPerHostIsolation(t *testing.T) {
+	cfg := test48Config()
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	subs := map[string]map[string]bool{"a.example": {}, "b.example": {}}
+	for i := 0; i < 30; i++ {
+		for host := range subs {
+			ip := p.pickSource(acct, "", host)
+			subs[host][prefixBits(ip, 64)] = true
+		}
+	}
+	for host, s := range subs {
+		if len(s) != 30 {
+			t.Errorf("host %s saw %d distinct /64s over 30 picks, want 30", host, len(s))
+		}
+	}
+}
+
+func TestSeedDeterminism(t *testing.T) {
+	mk := func(seed string) *Proxy {
+		cfg := test48Config()
+		cfg.PoolSeed = seed
+		p, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p1, p2, p3 := mk("0123456789abcdef"), mk("0123456789abcdef"), mk("fedcba9876543210")
+	seq := func(p *Proxy) []string {
+		out := make([]string, 0, 10)
+		for i := 0; i < 10; i++ {
+			out = append(out, p.pickSource(p.accounts["u"], "", "example.com").String())
+		}
+		return out
+	}
+	s1, s2, s3 := seq(p1), seq(p2), seq(p3)
+	for i := range s1 {
+		if s1[i] != s2[i] {
+			t.Fatalf("same seed diverged at pick %d: %s vs %s", i, s1[i], s2[i])
+		}
+	}
+	same := 0
+	for i := range s1 {
+		if s1[i] == s3[i] {
+			same++
+		}
+	}
+	if same == len(s1) {
+		t.Fatal("different seeds produced identical sequences")
+	}
+}
+
+func TestStreamCapEviction(t *testing.T) {
+	cfg := test48Config()
+	cfg.AvoidHostsMax = 3
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	for _, h := range []string{"a", "b", "c", "d", "e"} {
+		p.pickSource(acct, "", h+".example")
+	}
+	p.mu.Lock()
+	n := len(p.streams)
+	p.mu.Unlock()
+	if n > 3 {
+		t.Errorf("%d streams tracked, want <= 3", n)
+	}
+}
+
+func TestBackstopDisabled(t *testing.T) {
+	cfg := test48Config()
+	cfg.AvoidRecent = 0
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := p.accounts["u"]
+	seen := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		ip := p.pickSource(acct, "", "example.com")
+		seen[ip.String()] = true
+	}
+	if len(seen) != 10 {
+		t.Errorf("got %d distinct over 10 picks with backstop off", len(seen))
+	}
+}
+
+func TestNormalizeHost(t *testing.T) {
+	if got := normalizeHost("Example.COM."); got != "example.com" {
+		t.Errorf("got %q", got)
+	}
+	if got := normalizeHost("2001:DB8::1"); got != "2001:db8::1" {
+		t.Errorf("got %q", got)
+	}
 }

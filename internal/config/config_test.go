@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -122,6 +123,12 @@ func TestLoadValidation(t *testing.T) {
 		{"ipv4 host", "pool_hosts:\n  - 192.0.2.1\naccounts:\n  - username: u\n    password: p\n"},
 		{"empty username", "pool_prefix: 2001:db8::\naccounts:\n  - password: p\n"},
 		{"negative ttl", "pool_prefix: 2001:db8::\nsticky_ttl_seconds: -1\naccounts:\n  - username: u\n    password: p\n"},
+		{"bits too large", "pool_prefix: 2001:db8::\npool_bits: 129\naccounts:\n  - username: u\n    password: p\n"},
+		{"negative bits", "pool_prefix: 2001:db8::\npool_bits: -1\naccounts:\n  - username: u\n    password: p\n"},
+		{"removed avoid_levels knob", "pool_prefix: \"2001:db8::\"\navoid_levels: [56]\naccounts:\n  - username: u\n    password: p\n"},
+		{"removed avoid_per_host knob", "pool_prefix: \"2001:db8::\"\navoid_per_host: 32\naccounts:\n  - username: u\n    password: p\n"},
+		{"bad seed", "pool_prefix: \"2001:db8::\"\npool_seed: zzzz\naccounts:\n  - username: u\n    password: p\n"},
+		{"long seed", "pool_prefix: \"2001:db8::\"\npool_seed: 00112233445566778899\naccounts:\n  - username: u\n    password: p\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,6 +137,45 @@ func TestLoadValidation(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestLoadShortAndLongPools(t *testing.T) {
+	for _, bits := range []int{32, 48, 56, 64, 96, 120, 128} {
+		path := writeConfig(t, `
+pool_prefix: "2001:db8::"
+pool_bits: `+strconv.Itoa(bits)+`
+accounts:
+  - username: u
+    password: p
+`)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("pool_bits %d rejected: %v", bits, err)
+		}
+		if cfg.PoolBits != bits {
+			t.Errorf("PoolBits = %d, want %d", cfg.PoolBits, bits)
+		}
+	}
+}
+
+func TestLoadRotationKnobs(t *testing.T) {
+	path := writeConfig(t, `
+pool_prefix: "2a01:d0:b081::"
+pool_bits: 48
+avoid_recent: 1024
+avoid_hosts_max: 100
+pool_seed: deadbeef
+accounts:
+  - username: u
+    password: p
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AvoidRecent != 1024 || cfg.AvoidHostsMax != 100 || cfg.PoolSeed != "deadbeef" {
+		t.Errorf("rotation knobs = %+v", cfg)
 	}
 }
 

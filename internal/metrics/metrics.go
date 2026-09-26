@@ -49,8 +49,18 @@ type Stats struct {
 	ClaimsFail  atomic.Uint64
 	SessionsCur atomic.Int64
 	SessionsTot atomic.Uint64
-	DialErrors  map[DialReason]*atomic.Uint64
-	Accounts    map[string]*Account // keyed by account username
+	// PicksTotal counts fresh rotating picks; CycleSkips counts hygiene
+	// skip-advances inside rotation cycles (reserved/EUI values).
+	PicksTotal atomic.Uint64
+	CycleSkips atomic.Uint64
+	// HostsCur gauges destinations with rotation-cycle state currently
+	// tracked.
+	HostsCur atomic.Int64
+	// SeedFP is a short fingerprint of the pool stream seed (set once at
+	// startup, before serving).
+	SeedFP     string
+	DialErrors map[DialReason]*atomic.Uint64
+	Accounts   map[string]*Account // keyed by account username
 }
 
 // New returns a Stats with pre-created dial-error buckets and per-account
@@ -115,6 +125,10 @@ func (s *Stats) JSON() map[string]any {
 		"claims_failed":  s.ClaimsFail.Load(),
 		"sessions_total": s.SessionsTot.Load(),
 		"dial_errors":    s.dialErrCounts(),
+		"picks_total":    s.PicksTotal.Load(),
+		"cycle_skips":    s.CycleSkips.Load(),
+		"hosts_tracked":  s.HostsCur.Load(),
+		"pool_seed":      s.SeedFP,
 	}
 }
 
@@ -150,6 +164,12 @@ func (s *Stats) WritePrometheus(w io.Writer, version, poolMode string) {
 		fmt.Sprintf("v6pool_sessions_current %d", s.SessionsCur.Load()))
 	family("v6pool_sessions_created_total", "counter", "Sticky sessions created.",
 		fmt.Sprintf("v6pool_sessions_created_total %d", s.SessionsTot.Load()))
+	family("v6pool_picks_total", "counter", "Fresh rotating source picks.",
+		fmt.Sprintf("v6pool_picks_total %d", s.PicksTotal.Load()))
+	family("v6pool_cycle_skips_total", "counter", "Hygiene skip-advances inside rotation cycles.",
+		fmt.Sprintf("v6pool_cycle_skips_total %d", s.CycleSkips.Load()))
+	family("v6pool_hosts_tracked", "gauge", "Destinations with rotation-cycle state.",
+		fmt.Sprintf("v6pool_hosts_tracked %d", s.HostsCur.Load()))
 	family("v6pool_uptime_seconds", "gauge", "Seconds since start.",
 		fmt.Sprintf("v6pool_uptime_seconds %g", time.Since(s.Started).Seconds()))
 	family("v6pool_info", "gauge", "Static build and pool mode information.",
