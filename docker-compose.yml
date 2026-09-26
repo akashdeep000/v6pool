@@ -25,7 +25,11 @@ services:
       # prefix changes. Unset it and pick ONE of the alternatives instead:
       V6POOL_AUTO_POOL: "true"
       # V6POOL_POOL_PREFIX: "2001:db8:1:2::"
-      # V6POOL_POOL_BITS: "64"
+      # V6POOL_POOL_BITS: "64"            # any 1-128 (0 = default 64)
+      # V6POOL_POOL_SEED: ""              # empty = random per boot; hex = fixed
+      # V6POOL_STICKY_TTL: "300"          # sticky session lifetime, seconds
+      # V6POOL_AVOID_RECENT: "128"        # global recent-IP ring depth (0 = off)
+      # V6POOL_AVOID_HOSTS_MAX: "1024"    # max per-destination cycles tracked
       # V6POOL_POOL_HOSTS: '2001:db8:1:2::10 2001:db8:1:2::11'
       # V6POOL_SOURCE_IFACE: eth0
       # V6POOL_FIXED_SOURCE: 2001:db8:1:2::10

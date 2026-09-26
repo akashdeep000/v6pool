@@ -4,9 +4,15 @@ package proxy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akashdeep000/v6pool/internal/claim"
@@ -20,13 +26,21 @@ import (
 // user-session-<token> pins one source address for that token.
 const SessionSeparator = "-session-"
 
-// avoidWindow is how long a picked address is skipped for rotation.
-const avoidWindow = 10 * time.Second
+const (
+	// defaultHostsMax caps tracked per-destination cycles when
+	// avoid_hosts_max is absent (<= 0).
+	defaultHostsMax = 1024
+)
 
-// Account is a configured credential plus its runtime pick counter.
+// hostIdleTTL purges per-destination cycles idle this long (memory hygiene
+// only; rotation freshness comes from the cycles themselves).
+const hostIdleTTL = time.Hour
+
+// Account is a configured credential plus its stream domain (which keeps
+// accounts off each other's address sequences).
 type Account struct {
 	config.Account
-	counter uint64
+	domain uint64
 }
 
 type session struct {
@@ -39,6 +53,13 @@ type session struct {
 // a field so tests can substitute a fake connection.
 type DialFunc func(ctx context.Context, network, addr string, acct *Account, sessionKey string) (net.Conn, error)
 
+// streamEntry is one exact rotation cycle plus its last use (wall-clock,
+// memory hygiene only).
+type streamEntry struct {
+	stream   *pool.Stream
+	lastSeen time.Time
+}
+
 // Proxy is a rotating IPv6 HTTP/SOCKS5 proxy.
 type Proxy struct {
 	cfg      config.Config
@@ -48,24 +69,42 @@ type Proxy struct {
 	claimer  *claim.Claimer
 	stats    *metrics.Stats
 	dial     DialFunc
+	seed     uint64
 
 	mu        sync.Mutex
 	sessions  map[string]*session
-	avoid     map[string]time.Time
-	avoidRing []string
-	avoidIdx  int
+	streams   map[string]*streamEntry // per (account, destination[, prefix])
+	streamMax int
+	// brMap/brRing is a small global recent-IP ring: a cross-stream
+	// coincidence guard (independent per-destination cycles can still emit
+	// the same address). Depth avoid_recent, 0 disables.
+	brMap    map[string]struct{}
+	brRing   []string
+	brIdx    int
+	brCap    int
+	hostPick atomic.Uint64
 }
 
 // New builds a Proxy from a validated config.
 func New(cfg *config.Config) (*Proxy, error) {
+	seed, err := parseSeed(cfg.PoolSeed)
+	if err != nil {
+		return nil, err
+	}
 	p := &Proxy{
-		cfg:      *cfg,
-		accounts: make(map[string]*Account, len(cfg.Accounts)),
-		sessions: make(map[string]*session),
-		avoid:    make(map[string]time.Time),
+		cfg:       *cfg,
+		accounts:  make(map[string]*Account, len(cfg.Accounts)),
+		sessions:  make(map[string]*session),
+		streams:   make(map[string]*streamEntry),
+		brMap:     make(map[string]struct{}),
+		brCap:     cfg.AvoidRecent,
+		streamMax: cfg.AvoidHostsMax,
+	}
+	if p.streamMax <= 0 {
+		p.streamMax = defaultHostsMax
 	}
 	if cfg.PoolPrefix != "" {
-		p.pool = pool.New(cfg.PoolBits, net.ParseIP(cfg.PoolPrefix))
+		p.pool = pool.NewWithSeed(cfg.PoolBits, net.ParseIP(cfg.PoolPrefix), seed)
 	}
 	for _, h := range cfg.PoolHosts {
 		p.hosts = append(p.hosts, net.ParseIP(h).To16())
@@ -73,13 +112,49 @@ func New(cfg *config.Config) (*Proxy, error) {
 	usernames := make([]string, 0, len(cfg.Accounts))
 	for i := range cfg.Accounts {
 		a := &Account{Account: cfg.Accounts[i]}
+		if p.pool != nil {
+			a.domain = p.pool.AccountDomain(uint64(i))
+		}
 		p.accounts[a.Username] = a
 		usernames = append(usernames, a.Username)
 	}
 	p.stats = metrics.New(usernames)
+	p.stats.SeedFP = hex.EncodeToString(uint64Bytes(seed))[:16]
 	p.claimer = claim.New(cfg.ClaimIface, cfg.ClaimTTL)
 	p.dial = p.dialTarget
 	return p, nil
+}
+
+// parseSeed decodes an optional hex pool seed; empty means a fresh
+// crypto/rand seed per boot so restarts never replay address sequences.
+func parseSeed(s string) (uint64, error) {
+	if s == "" {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return 0, err
+		}
+		return uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
+			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7]), nil
+	}
+	raw, err := hex.DecodeString(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid pool_seed %q: %w", s, err)
+	}
+	if len(raw) == 0 || len(raw) > 8 {
+		return 0, fmt.Errorf("invalid pool_seed %q: want 1-16 hex chars", s)
+	}
+	var v uint64
+	for _, b := range raw {
+		v = v<<8 | uint64(b)
+	}
+	return v, nil
+}
+
+func uint64Bytes(v uint64) []byte {
+	return []byte{
+		byte(v >> 56), byte(v >> 48), byte(v >> 40), byte(v >> 32),
+		byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v),
+	}
 }
 
 // Stats exposes the proxy's counter set.
@@ -147,10 +222,11 @@ func ConstantTimeEqual(a, b string) bool {
 	return v == 0
 }
 
-// pickSource chooses the source address for a request. Priority:
-// fixed_source, then the interface's live address (single-address mode),
-// then the sticky-session address, then a fresh rotating address.
-func (p *Proxy) pickSource(acct *Account, sessionKey string) net.IP {
+// pickSource chooses the source address for a request to destHost.
+// Priority: fixed_source, then the interface's live address
+// (single-address mode), then the sticky-session address, then the next
+// address in the per-destination rotation cycle.
+func (p *Proxy) pickSource(acct *Account, sessionKey, destHost string) net.IP {
 	if p.cfg.FixedSource != "" {
 		return net.ParseIP(p.cfg.FixedSource)
 	}
@@ -160,13 +236,11 @@ func (p *Proxy) pickSource(acct *Account, sessionKey string) net.IP {
 		}
 	}
 	if sessionKey != "" {
-		if ip, ok := p.stickyIP(acct, sessionKey); ok {
+		if ip, ok := p.stickyIP(acct, sessionKey, destHost); ok {
 			return ip
 		}
 	}
-	ip := p.randomIP(acct)
-	p.remember(ip)
-	return ip
+	return p.freshIP(acct, destHost)
 }
 
 // livePrefix derives the pool prefix from the interface's current global
@@ -188,71 +262,149 @@ func (p *Proxy) livePrefix() net.IP {
 	return ifaceutil.PrefixFromAddr(ip, p.cfg.PoolBits)
 }
 
-// randomIP picks the next rotating address: from the pool_hosts list when
-// configured, otherwise from the (possibly auto-derived) prefix pool.
-func (p *Proxy) randomIP(acct *Account) net.IP {
-	p.mu.Lock()
-	acct.counter++
-	seq := acct.counter
-	p.mu.Unlock()
+// freshIP picks the next rotating address for destHost. Address-list mode
+// round-robins the configured addresses. Sliced accounts use the legacy
+// keyed uniform mapping over their range. Full-pool picks advance the
+// per-(account, destination) breadth-first cycle, so consecutive picks walk
+// fresh aggregates at every prefix level with zero tracking; a small global
+// recent-IP ring guards against cross-stream coincidences.
+func (p *Proxy) freshIP(acct *Account, destHost string) net.IP {
 	if len(p.hosts) > 0 {
-		return p.hosts[seq%uint64(len(p.hosts))]
+		n := p.hostPick.Add(1)
+		return p.hosts[n%uint64(len(p.hosts))]
 	}
-	pl := p.pool
-	if p.cfg.AutoPool {
-		pre := p.livePrefix()
-		if pre == nil {
-			return nil
-		}
-		pl = pool.New(p.cfg.PoolBits, pre)
+	pl, suffix := p.poolForPick()
+	if pl == nil {
+		return nil
 	}
-	var ip net.IP
-	for try := 0; try < 8; try++ {
-		ip = pl.IPFor(seq, acct.Start, acct.Size)
-		if !p.recentlyUsed(ip) {
-			break
+	if acct.Size > 0 {
+		gen := func() net.IP {
+			n := p.hostPick.Add(1)
+			return pl.IPForAcct(n, acct.domain^tweakHost(destHost), acct.Start, acct.Size)
 		}
-		seq += 0x9E3779B97F4A7C15
+		return p.backstopGuard(gen(), gen)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.streamLocked(acct, destHost, pl, suffix)
+	ip, sk := st.Next()
+	p.stats.CycleSkips.Add(uint64(sk))
+	ip = p.backstopLocked(ip, func() net.IP {
+		ip, sk := st.Next()
+		p.stats.CycleSkips.Add(uint64(sk))
+		return ip
+	})
+	p.stats.PicksTotal.Add(1)
+	return ip
+}
+
+// poolForPick resolves the pool for one pick: the static pool, or a
+// per-pick pool over the live prefix in auto_pool mode. The suffix
+// distinguishes auto-pool prefixes in stream keys so a roam starts a fresh
+// cycle instead of reusing stale positions.
+func (p *Proxy) poolForPick() (pl *pool.Pool, suffix string) {
+	if !p.cfg.AutoPool {
+		return p.pool, ""
+	}
+	pre := p.livePrefix()
+	if pre == nil {
+		return nil, ""
+	}
+	return pool.NewWithSeed(p.cfg.PoolBits, pre, p.seed), "\x00" + pre.String()
+}
+
+// streamLocked returns the cycle for (account, destination[, prefix]),
+// creating it on demand and evicting the idlest entry over cap. Callers
+// must hold p.mu.
+func (p *Proxy) streamLocked(acct *Account, destHost string, pl *pool.Pool, suffix string) *pool.Stream {
+	key := acct.Username + "\x00" + destHost + suffix
+	if e, ok := p.streams[key]; ok {
+		e.lastSeen = time.Now()
+		return e.stream
+	}
+	for p.streamMax > 0 && len(p.streams) >= p.streamMax {
+		p.evictStreamLocked()
+	}
+	e := &streamEntry{stream: pl.NewStream(acct.domain, tweakHost(destHost)), lastSeen: time.Now()}
+	p.streams[key] = e
+	p.stats.HostsCur.Store(int64(len(p.streams)))
+	return e.stream
+}
+
+// evictStreamLocked drops the least-recently-seen cycle. Callers must hold
+// p.mu.
+func (p *Proxy) evictStreamLocked() {
+	oldest, oldestAt := "", time.Now()
+	for k, e := range p.streams {
+		if e.lastSeen.Before(oldestAt) || oldest == "" {
+			oldest, oldestAt = k, e.lastSeen
+		}
+	}
+	if oldest != "" {
+		delete(p.streams, oldest)
+	}
+}
+
+// backstopGuard records ip in the global recent-IP ring, regenerating via
+// next on coincidences (bounded). It is the cross-stream safety net:
+// independent per-destination cycles can still emit the same address.
+func (p *Proxy) backstopGuard(ip net.IP, next func() net.IP) net.IP {
+	if p.brCap <= 0 {
+		return ip
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.backstopLocked(ip, next)
+}
+
+// backstopLocked is backstopGuard under the caller's lock.
+func (p *Proxy) backstopLocked(ip net.IP, next func() net.IP) net.IP {
+	if p.brCap <= 0 {
+		return ip
+	}
+	for i := 0; i < 3 && next != nil && p.brHit(ip); i++ {
+		ip = next()
+	}
+	key := ip.String()
+	if _, ok := p.brMap[key]; !ok {
+		if len(p.brRing) < p.brCap {
+			p.brRing = append(p.brRing, key)
+		} else if p.brCap > 0 {
+			old := p.brRing[p.brIdx%len(p.brRing)]
+			delete(p.brMap, old)
+			p.brRing[p.brIdx%len(p.brRing)] = key
+			p.brIdx++
+		}
+		p.brMap[key] = struct{}{}
 	}
 	return ip
 }
 
-// recentlyUsed reports whether ip was picked within the avoid window.
-func (p *Proxy) recentlyUsed(ip net.IP) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	t, ok := p.avoid[ip.String()]
-	return ok && time.Since(t) < avoidWindow
+// brHit reports whether ip is in the recent-IP ring. Callers must hold p.mu.
+func (p *Proxy) brHit(ip net.IP) bool {
+	_, ok := p.brMap[ip.String()]
+	return ok
 }
 
-// remember marks ip as recently used, capping the set at avoid_recent entries
-// in a ring so memory stays bounded.
-func (p *Proxy) remember(ip net.IP) {
-	if p.cfg.AvoidRecent <= 0 {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	key := ip.String()
-	if _, ok := p.avoid[key]; ok {
-		p.avoid[key] = time.Now()
-		return
-	}
-	if len(p.avoidRing) < p.cfg.AvoidRecent {
-		p.avoidRing = append(p.avoidRing, key)
-		p.avoid[key] = time.Now()
-		return
-	}
-	old := p.avoidRing[p.avoidIdx%len(p.avoidRing)]
-	delete(p.avoid, old)
-	p.avoidRing[p.avoidIdx%len(p.avoidRing)] = key
-	p.avoidIdx++
-	p.avoid[key] = time.Now()
+// normalizeHost canonicalizes an upstream host for per-destination cycles:
+// lowercase, no trailing dot. IP literals pass through lowercased.
+func normalizeHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// tweakHost hashes a normalized destination into a cycle tweak so each site
+// walks an independent rotation.
+func tweakHost(destHost string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(destHost))
+	return h.Sum64()
 }
 
 // stickyIP returns the address pinned to a session token, creating a new
-// session when needed. Sessions expire after sticky_ttl_seconds.
-func (p *Proxy) stickyIP(acct *Account, sessionKey string) (net.IP, bool) {
+// session when needed. Sessions expire after sticky_ttl_seconds. Fresh
+// session addresses advance the destination cycle, so new sessions also
+// spread; only repeat visits pin.
+func (p *Proxy) stickyIP(acct *Account, sessionKey, destHost string) (net.IP, bool) {
 	p.mu.Lock()
 	if s, ok := p.sessions[sessionKey]; ok && s.acct == acct.Username && time.Now().Before(s.expire) {
 		p.mu.Unlock()
@@ -263,13 +415,13 @@ func (p *Proxy) stickyIP(acct *Account, sessionKey string) (net.IP, bool) {
 	}
 	p.mu.Unlock()
 
-	// The lock is dropped before picking a fresh address: randomIP consults
-	// the avoid ring, which needs p.mu itself.
-	ip := p.randomIP(acct)
+	// The lock is dropped before picking a fresh address: freshIP takes
+	// p.mu itself for stream lookup and backstop recording.
+	ip := p.freshIP(acct, destHost)
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if s, ok := p.sessions[sessionKey]; ok && s.acct == acct.Username && time.Now().Before(s.expire) {
+		p.mu.Unlock()
 		return s.ip, true
 	}
 	p.sessions[sessionKey] = &session{
@@ -279,6 +431,7 @@ func (p *Proxy) stickyIP(acct *Account, sessionKey string) (net.IP, bool) {
 	}
 	p.stats.SessionsCur.Add(1)
 	p.stats.SessionsTot.Add(1)
+	p.mu.Unlock()
 	return ip, true
 }
 
@@ -304,6 +457,23 @@ func (p *Proxy) SweepSessions() {
 // SweepClaims removes idle claimed source addresses. Called periodically.
 func (p *Proxy) SweepClaims() {
 	p.claimer.Sweep()
+}
+
+// SweepStreams purges per-destination cycles idle longer than hostIdleTTL
+// and enforces the stream cap. Called periodically; rotation freshness
+// comes from the cycles themselves, so sweeping is memory hygiene only.
+func (p *Proxy) SweepStreams() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, e := range p.streams {
+		if time.Since(e.lastSeen) > hostIdleTTL {
+			delete(p.streams, k)
+		}
+	}
+	for p.streamMax > 0 && len(p.streams) > p.streamMax {
+		p.evictStreamLocked()
+	}
+	p.stats.HostsCur.Store(int64(len(p.streams)))
 }
 
 // ensureClaimed binds src to the tether interface when it is not already
@@ -337,7 +507,7 @@ func (p *Proxy) dialTarget(ctx context.Context, network, addr string, acct *Acco
 	if err != nil {
 		return nil, err
 	}
-	src := p.pickSource(acct, sessionKey)
+	src := p.pickSource(acct, sessionKey, normalizeHost(host))
 	p.ensureClaimed(src)
 	d6 := net.Dialer{
 		LocalAddr: &net.TCPAddr{IP: src},

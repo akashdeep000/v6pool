@@ -10,7 +10,7 @@ func TestJSONShape(t *testing.T) {
 	s.HTTPReqs.Add(3)
 	s.Account("u1").BytesIn.Add(42)
 	j := s.JSON()
-	for _, k := range []string{"uptime_seconds", "accounts", "session_count", "http_requests", "socks5_conns", "active_conns", "bytes_in", "bytes_out", "rejected", "claims_ok", "claims_failed", "sessions_total", "dial_errors"} {
+	for _, k := range []string{"uptime_seconds", "accounts", "session_count", "http_requests", "socks5_conns", "active_conns", "bytes_in", "bytes_out", "rejected", "claims_ok", "claims_failed", "sessions_total", "dial_errors", "picks_total", "cycle_skips", "hosts_tracked", "pool_seed"} {
 		if _, ok := j[k]; !ok {
 			t.Errorf("JSON missing key %q", k)
 		}

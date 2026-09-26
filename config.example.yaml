@@ -15,9 +15,12 @@ stats_token: "CHANGE_ME"
 
 # --- Pool selection ---------------------------------------------------------
 # Option A: a whole routed range (Hetzner, OVH, Vultr, ... provider routes
-# the /64 (or /48) to the host). pool_prefix + pool_bits.
+# the /64 to the host; tunnel brokers route a /48). pool_prefix + pool_bits.
+# Rotation walks a permuted breadth-first cycle: after 2 picks both /n+1
+# halves are used, after 4 all /n+2 quarters, and so on bit by bit — exact,
+# with O(1) state and no tracking.
 pool_prefix: "2001:db8:1:2::"
-pool_bits: 64
+pool_bits: 64                   # any 1-128 works (0 = default 64)
 
 # Option B: an explicit list of addresses the provider routes to this host.
 # Works with any provider that only routes the addresses configured on the
@@ -42,7 +45,12 @@ pool_bits: 64
 
 # --- Behavior ---------------------------------------------------------------
 sticky_ttl_seconds: 300   # how long a -session-<token> keeps its IP
-avoid_recent: 128         # don't reuse the last N picked addresses
+avoid_recent: 128         # global recent-IP ring depth: guards against
+                          # cross-stream coincidences (0 = off)
+# avoid_hosts_max: 1024   # max per-destination rotation cycles tracked
+                          # (LRU, idle purged hourly)
+# pool_seed: ""           # empty = fresh random cycle per boot (restarts never
+                          # replay); 1-16 hex chars = fixed, reproducible cycle
 dial_timeout_seconds: 15
 log_requests: true        # per-request log lines to journald/stdout
 
@@ -63,7 +71,9 @@ log_requests: true        # per-request log lines to journald/stdout
 # --- Accounts ---------------------------------------------------------------
 # username: password used by clients. Sticky sessions: append -session-<token>
 # to the username to pin one IP for that session.
-# Optional per-account slice of the prefix pool: start + size.
+# Optional per-account slice of the prefix pool: start + size. For /64 pools
+# this is an IID range; for pools shorter than /64 (e.g. /48) it is a /64
+# range while the IID stays fully random.
 accounts:
   - name: primary
     username: CHANGE_ME

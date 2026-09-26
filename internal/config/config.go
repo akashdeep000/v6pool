@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -24,7 +25,8 @@ const (
 
 // Account is a named credential with an optional slice of the address pool.
 // When Size > 0, source addresses are drawn from [Start, Start+Size) of the
-// pool; otherwise the full pool is used.
+// pool: an IID range for /64 pools, a /64-subnet range (IID fully random)
+// for pools shorter than /64 such as a /48. Otherwise the full pool is used.
 type Account struct {
 	Name     string `yaml:"name"`
 	Username string `yaml:"username"`
@@ -35,26 +37,28 @@ type Account struct {
 
 // Config is the v6pool configuration.
 type Config struct {
-	HTTPListen   string    `yaml:"http_listen"`
-	SOCKS5Listen string    `yaml:"socks5_listen"`
-	StatsListen  string    `yaml:"stats_listen"`
-	StatsToken   string    `yaml:"stats_token"`
-	EnableHTTP   bool      `yaml:"enable_http"`
-	EnableSOCKS5 bool      `yaml:"enable_socks5"`
-	EnableStats  bool      `yaml:"enable_stats"`
-	PoolPrefix   string    `yaml:"pool_prefix"`
-	PoolBits     int       `yaml:"pool_bits"`
-	PoolHosts    []string  `yaml:"pool_hosts"`
-	FixedSource  string    `yaml:"fixed_source"`
-	SourceIface  string    `yaml:"source_iface"`
-	AutoPool     bool      `yaml:"auto_pool"`
-	ClaimIface   string    `yaml:"claim_iface"`
-	ClaimTTL     int       `yaml:"claim_ttl_seconds"`
-	LogRequests  bool      `yaml:"log_requests"`
-	StickyTTL    int       `yaml:"sticky_ttl_seconds"`
-	AvoidRecent  int       `yaml:"avoid_recent"`
-	DialTimeout  int       `yaml:"dial_timeout_seconds"`
-	Accounts     []Account `yaml:"accounts"`
+	HTTPListen    string    `yaml:"http_listen"`
+	SOCKS5Listen  string    `yaml:"socks5_listen"`
+	StatsListen   string    `yaml:"stats_listen"`
+	StatsToken    string    `yaml:"stats_token"`
+	EnableHTTP    bool      `yaml:"enable_http"`
+	EnableSOCKS5  bool      `yaml:"enable_socks5"`
+	EnableStats   bool      `yaml:"enable_stats"`
+	PoolPrefix    string    `yaml:"pool_prefix"`
+	PoolBits      int       `yaml:"pool_bits"`
+	PoolHosts     []string  `yaml:"pool_hosts"`
+	FixedSource   string    `yaml:"fixed_source"`
+	SourceIface   string    `yaml:"source_iface"`
+	AutoPool      bool      `yaml:"auto_pool"`
+	ClaimIface    string    `yaml:"claim_iface"`
+	ClaimTTL      int       `yaml:"claim_ttl_seconds"`
+	LogRequests   bool      `yaml:"log_requests"`
+	StickyTTL     int       `yaml:"sticky_ttl_seconds"`
+	AvoidRecent   int       `yaml:"avoid_recent"`
+	AvoidHostsMax int       `yaml:"avoid_hosts_max"`
+	PoolSeed      string    `yaml:"pool_seed"`
+	DialTimeout   int       `yaml:"dial_timeout_seconds"`
+	Accounts      []Account `yaml:"accounts"`
 }
 
 // Load reads, parses and validates the configuration file at path.
@@ -143,6 +147,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("invalid pool_prefix %q", c.PoolPrefix)
 		}
 	}
+	if c.PoolBits < 0 || c.PoolBits > 128 {
+		return fmt.Errorf("pool_bits %d out of range [0,128]", c.PoolBits)
+	}
 	for _, h := range c.PoolHosts {
 		ip := net.ParseIP(h)
 		if ip == nil || ip.To16() == nil || ip.To4() != nil {
@@ -159,6 +166,12 @@ func (c *Config) validate() error {
 	}
 	if c.StickyTTL < 0 || c.AvoidRecent < 0 || c.DialTimeout < 0 || c.ClaimTTL < 0 {
 		return fmt.Errorf("sticky_ttl_seconds, avoid_recent, dial_timeout_seconds and claim_ttl_seconds must be non-negative")
+	}
+	if c.PoolSeed != "" {
+		raw, err := hex.DecodeString(c.PoolSeed)
+		if err != nil || len(raw) == 0 || len(raw) > 8 {
+			return fmt.Errorf("invalid pool_seed %q: want 1-16 hex chars", c.PoolSeed)
+		}
 	}
 	return nil
 }
